@@ -847,7 +847,11 @@ def _patch(prompt, job):
                   and n["inputs"]["images"][0] == next(k for k, v in prompt.items() if v is rife)), None) if rife else None
     if not job.get("upscale", True) and upscaler is not None and rife is not None:
         rife["inputs"]["frames"] = upscaler["inputs"]["images"]
-    if not job.get("rife", True) and rife is not None and saver is not None:
+    # 48 fps interpolation is opt-in: "rife": true (or RIFE_DEFAULT=true on the endpoint).
+    rife_on = job.get("rife")
+    if rife_on is None:
+        rife_on = os.environ.get("RIFE_DEFAULT", "false").lower() in ("1", "true", "yes")
+    if not rife_on and rife is not None and saver is not None:
         saver["inputs"]["images"] = rife["inputs"]["frames"]
         # The VHS saver bakes 48 (the RIFE'd rate) — halve it. The Director's
         # CreateVideo takes fps as a LINK from the Director's own frame_rate

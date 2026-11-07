@@ -64,7 +64,7 @@ A production-ready [Runpod Serverless](https://docs.runpod.io/serverless/overvie
 - `10eros_turbo`: TenStrip's 10Eros Max TURBO-hybrid beta5 (FL2VA finetune, INT8 ConvRot, turbo fused in, so the turbo LoRA slot is zeroed): 8 steps, euler/simple, shift 12/3. Use it with the T2VA / I2VA / FL2VA workflows; it ignores `<Picture N>` references.
 - `10eros_r2va_turbo`: 10Eros Max TURBO ref2va beta2 (INT8 ConvRot by cicalooo) for the R2VA workflows, so references are honoured. Same 8-step settings. `10eros` (20 steps) expects a non-turbo 10Eros checkpoint, which the manifest does not download.
 - `video_size` — `auto` (follows the image/stills) or an explicit MMH3 native preset (`1344x768 (16:9)`, `1184x864 (4:3)`, …)
-- `upscale` / `rife` — TensorRT post chain · `"action": "health"` — status + workflow list, no generation
+- `upscale` / `rife` — TensorRT post chain (2× upscale on by default; `rife` 48 fps interpolation is off unless `"rife": true` or `RIFE_DEFAULT=true`) · `"action": "health"` — status + workflow list, no generation
 
 ## Reference audio + six-part prompts (ref2v)
 
