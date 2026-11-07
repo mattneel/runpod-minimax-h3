@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 import uuid
@@ -164,9 +165,21 @@ async def _ensure_comfy():
         raise RuntimeError(f"ComfyUI failed to boot: {_BOOT_ERR} (see /workspace/comfy.log)")
 
 
+# Many hosts and CDNs reject urllib's default "Python-urllib/x.y" agent with a 403.
+MEDIA_UA = os.environ.get("MEDIA_USER_AGENT",
+                          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/124.0 Safari/537.36 h3-ref2v-worker")
+
+
 def _media_bytes(value):
     if isinstance(value, str) and value.startswith("http"):
-        return urllib.request.urlopen(value, timeout=120).read()
+        req = urllib.request.Request(value, headers={"User-Agent": MEDIA_UA, "Accept": "*/*"})
+        try:
+            return urllib.request.urlopen(req, timeout=120).read()
+        except urllib.error.HTTPError as e:
+            short = value if len(value) <= 120 else value[:117] + "..."
+            raise RuntimeError(f"could not download {short}: HTTP {e.code} {e.reason} "
+                               "(the host refused; use a direct link that allows hotlinking, or send base64)") from None
     if isinstance(value, str) and value.startswith("volume:"):
         # An earlier job's output still on the network volume ("volume:<volume_key>"),
         # so a clip can feed the next pass (e.g. one character swap per pass).
