@@ -1301,9 +1301,30 @@ async def handler(job):
         # A job that produced nothing is a failure, not an empty success.
         why = _node_error_text(node_errors) if node_errors else "the workflow finished without saving a file"
         raise RuntimeError(f"no output produced: {why}")
-    return {"outputs": outputs, "texts": texts}
+    return {"outputs": outputs, "texts": texts, "input": _echo_input(job)}
+
+
+def _echo_input(job):
+    """The job's own input, returned with its result so any request can be re-run."""
+    def trim(v):
+        if isinstance(v, str) and len(v) > 20000:  # inline media, not URLs
+            return f"<{len(v)} chars omitted>"
+        if isinstance(v, dict):
+            return {k: trim(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [trim(x) for x in v]
+        return v
+    return trim(job.get("input") or {})
+
+
+async def _handler_with_input(job):
+    """Failed jobs carry their input too, inside the error text."""
+    try:
+        return await handler(job)
+    except Exception as e:
+        raise RuntimeError(f"{e}\ninput: {json.dumps(_echo_input(job))}") from e
 
 
 if __name__ == "__main__":
     threading.Thread(target=_boot_in_bg, daemon=True).start()
-    runpod.serverless.start({"handler": handler})
+    runpod.serverless.start({"handler": _handler_with_input})
