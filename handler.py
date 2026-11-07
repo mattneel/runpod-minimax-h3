@@ -562,6 +562,10 @@ def _patch(prompt, job):
     # The Director graphs carry their own two unets; the config preset's unet
     # needle would rewrite both to one model — keep the preset's sampler/LoRA
     # parts but blind the needle.
+    if job.get("config") and job["config"] not in MINIMAX_CONFIGS:
+        # Never fall back to the workflow's own model silently: a worker on an older
+        # build (or a typo) must say so instead of rendering with something else.
+        raise RuntimeError(f"unknown config {job['config']!r}; this worker knows: {', '.join(MINIMAX_CONFIGS)}")
     cfg = MINIMAX_CONFIGS.get(job.get("config"))
     if director_nodes and cfg:
         cfg = {**cfg, "unet": None}
