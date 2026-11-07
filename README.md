@@ -80,6 +80,13 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   17k+5 grid (8 s = 192 frames exactly, 8.5 s = 209 frames = 8.7 s), so for a pinned track pick
   `seconds` at or just under its length. A job that saves no file now fails with ComfyUI's reason
   instead of returning an empty `outputs` list.
+- `output: "volume"`: write the result straight onto the network volume instead of returning it inline.
+  Files over the inline limit (10 MB) go there automatically. The output entry carries
+  `volume_key` (`outputs/<job id>/<file>`); read it through the volume's S3 API:
+  `aws s3 cp s3://<volume id>/<volume_key> . --region <DC> --endpoint-url https://s3api-<dc>.runpod.io`.
+  Copies are deleted after 24 hours. Set `OUTPUT_S3_BUCKET` on the endpoint to get a ready `s3_uri`.
+  RunPod's volume S3 API has no presigned URLs, so `s3Config` pointing at it returns `s3_uri` only;
+  other S3 providers also get a presigned `url`.
 - `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
 - `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
   `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`

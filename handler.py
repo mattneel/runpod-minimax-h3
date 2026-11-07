@@ -974,27 +974,59 @@ def _s3_client(cfg):
     )
 
 
+def _volume_key(job, filename):
+    return f"{S3_PREFIX}/{job.get('id', 'job')}/{filename}"
+
+
+def _save_to_volume(filename, data, job):
+    """Write an output straight onto the network volume (no credentials needed on
+    the job). It is then readable through the volume's S3 API as
+    s3://<volume id>/<key>; the endpoint deletes these copies after 24 hours."""
+    key = _volume_key(job, filename)
+    dest = Path("/runpod-volume") / key
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(dest)
+    out = {"filename": filename, "bytes": len(data), "volume_key": key}
+    bucket = os.environ.get("OUTPUT_S3_BUCKET")
+    if bucket:
+        out["s3_uri"] = f"s3://{bucket}/{key}"
+    print(f"[handler] {filename} -> volume {key} ({len(data)/1e6:.1f}MB)", flush=True)
+    return out
+
+
 def _emit_file(filename, data, job, inline_used):
-    """Small outputs inline as b64; large ones upload to the job's s3Config
-    storage (e.g. the RunPod network volume S3 API) and return a presigned URL."""
+    """Small outputs inline as b64. Large ones (or every one, with
+    "output": "volume") go to the job's s3Config bucket, else straight onto the
+    network volume, instead of an inline result RunPod would reject."""
     oversized = len(data) > INLINE_MAX or inline_used[0] + len(data) > INLINE_BUDGET
+    to_volume = str(job.get("output") or (job.get("input") or {}).get("output") or "").lower() == "volume"
     s3c = _s3_cfg(job)
-    if oversized and s3c:
+    if (oversized or to_volume) and s3c:
         try:
-            key = f"{S3_PREFIX}/{job.get('id', 'job')}/{filename}"
+            key = _volume_key(job, filename)
             client = _s3_client(s3c)
             client.put_object(Bucket=s3c["bucketName"], Key=key, Body=data)
-            url = client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": s3c["bucketName"], "Key": key},
-                ExpiresIn=int(os.environ.get("S3_URL_TTL_S", "3600")),
-            )
-            print(f"[handler] {filename} -> s3://{s3c['bucketName']}/{key} ({len(data)/1e6:.1f}MB)", flush=True)
-            return {"filename": filename, "url": url}
+            out = {"filename": filename, "bytes": len(data), "s3_uri": f"s3://{s3c['bucketName']}/{key}"}
+            # RunPod's own volume S3 API does not honour presigned URLs; real S3/R2 do.
+            if "runpod.io" not in urllib.parse.urlparse(s3c["endpointUrl"]).netloc:
+                out["url"] = client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": s3c["bucketName"], "Key": key},
+                    ExpiresIn=int(os.environ.get("S3_URL_TTL_S", "3600")),
+                )
+            print(f"[handler] {filename} -> {out['s3_uri']} ({len(data)/1e6:.1f}MB)", flush=True)
+            return out
         except Exception as e:
-            print(f"[handler] s3 upload failed for {filename}: {e} — falling back to inline", flush=True)
-    elif oversized:
-        print(f"[handler] {filename}: {len(data)/1e6:.1f}MB over inline limit, no s3Config — result may be dropped by RunPod", flush=True)
+            print(f"[handler] s3 upload failed for {filename}: {e} — trying the volume", flush=True)
+    if (oversized or to_volume) and os.path.isdir("/runpod-volume"):
+        try:
+            return _save_to_volume(filename, data, job)
+        except Exception as e:
+            print(f"[handler] volume write failed for {filename}: {e} — falling back to inline", flush=True)
+    if oversized:
+        print(f"[handler] {filename}: {len(data)/1e6:.1f}MB over inline limit and nowhere else to put it — result may be dropped by RunPod", flush=True)
     inline_used[0] += len(data)
     return {"filename": filename, "b64": base64.b64encode(data).decode()}
 
