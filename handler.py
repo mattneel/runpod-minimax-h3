@@ -592,8 +592,9 @@ def _patch(prompt, job):
                 # node entirely below (ComfyUI validates lora_name even at
                 # strength 0), so mark it for removal.
                 sel = job.get("lora") or "none"
-                drop_lora = nid
-                if sel != "none":
+                if sel == "none":
+                    drop_lora = nid
+                else:
                     needle = {"realism": "realism", "char_swap": "character_swap"}.get(sel, sel)
                     found = _find_file("loras", needle)
                     if not found:
