@@ -387,6 +387,12 @@ def _patch(prompt, job):
     for i, src in enumerate(audio_sources):
         data = _media_bytes(src)
         audios.append(_upload(f"{base}_audio_{i}{_audio_ext(src, data)}", data))
+    # Exact soundtrack (song section / dub): pinned onto the output's audio with
+    # MiniMaxH3AddGuide, so the clip plays this track and the picture is generated to it.
+    lipsync_name = None
+    if job.get("lipsync_audio"):
+        data = _media_bytes(job["lipsync_audio"])
+        lipsync_name = _upload(f"{base}_lipsync{_audio_ext(job['lipsync_audio'], data)}", data)
 
     def _find_file(kind, needle):
         """Locate a model file under the volume + local model dirs."""
@@ -545,6 +551,31 @@ def _patch(prompt, job):
                 prompt[nid] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
                 n["inputs"][f"ref_audios.ref_audio_{start + i}"] = [nid, 0]
         print(f"[handler] wired {len(audios)} reference audio(s) into ref2v", flush=True)
+    if lipsync_name:
+        conds = [nid for nid, n in prompt.items()
+                 if n.get("class_type") in ("MiniMaxH3ReferenceToVideo", "MiniMaxH3ImageToVideo")]
+        if not conds:
+            raise RuntimeError("'lipsync_audio' needs a MiniMax H3 workflow")
+        cond = conds[0]
+        audio_vae = prompt[cond]["inputs"].get("audio_vae")
+        if not isinstance(audio_vae, list):
+            loader = next((nid for nid, n in prompt.items() if n.get("class_type") == "VAELoader"
+                           and "audio" in str(n.get("inputs", {}).get("vae_name", "")).lower()), None)
+            if loader is None:
+                raise RuntimeError("'lipsync_audio' needs the H3 audio VAE in the workflow")
+            audio_vae = [loader, 0]
+        prompt["job_lipsync_src"] = {"class_type": "LoadAudio", "inputs": {"audio": lipsync_name}}
+        prompt["job_lipsync_guide"] = {"class_type": "MiniMaxH3AddGuide", "inputs": {
+            "positive": [cond, 0], "latent": [cond, 1], "audio_vae": audio_vae,
+            "audio": ["job_lipsync_src", 0],
+            "frame_idx": int(round(float(job.get("lipsync_at") or 0) * 24))}}
+        for nid, n in prompt.items():
+            if nid == "job_lipsync_guide":
+                continue
+            for k, v in n.get("inputs", {}).items():
+                if v == [cond, 0]:
+                    n["inputs"][k] = ["job_lipsync_guide", 0]
+        print(f"[handler] lipsync_audio pinned at frame {prompt['job_lipsync_guide']['inputs']['frame_idx']}", flush=True)
     # LoadImage nodes left on the template filename (fewer uploads than loaders —
     # e.g. single-image edits with an optional image2) would fail validation;
     # drop them and unlink their consumers instead.

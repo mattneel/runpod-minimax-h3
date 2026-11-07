@@ -71,6 +71,11 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
 - `audios`: up to 3 reference audio files (URL or base64; mp3/wav/flac/ogg/m4a) wired into the
   ref2v node as `<Audio 1>`, `<Audio 2>`, ... Mark a song section `fully_copy` in the prompt to
   have the clip use it exactly (the character performs to it), or `reference` for timbre only.
+- `lipsync_audio` (+ optional `lipsync_at`, seconds): the exact soundtrack — a song section or a dub.
+  It is pinned onto the output's audio track (MiniMaxH3AddGuide) so the clip plays this audio and
+  the picture, mouths included, is generated to it. Set `seconds` to the track's length; past the
+  end of the track the model makes up its own audio. `audios` alone is only a reference the model
+  may or may not copy.
 - `sections`: MiniMax's six-part full-reference prompt as an object
   (`subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
   `overall_soundscape`, `non_diegetic_music`). It is assembled in MiniMax's format and sent
