@@ -96,7 +96,9 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
 - Any media field (`images`, `audios`, `videos`, `lipsync_audio`, ...) also takes `"volume:<volume_key>"`, an earlier
   job's output still on the volume, so passes can be chained without re-uploading.
 - `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
-- `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
+- `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps; each covers exactly the output window
+  (`seconds`, 15 s max) starting `source_start` seconds in (or a per-video `"start"`), and `lipsync_audio` is cut to
+  the same window (`lipsync_start` overrides), so a long source is done in 15 s segments at 0, 15, 30, ...;
   `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`
   (soundtracks are numbered before `audios`).
 - `loras`: `[{"name": "char_swap", "strength": 1.0}]` stacks LoRAs from the volume after the workflow's own

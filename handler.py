@@ -215,6 +215,35 @@ MAX_REF_VIDEOS = 3
 QWEN_DURATIONS = (5, 10, 15, 20)
 
 
+def _start_seconds(value, name):
+    if value is None or value == "":
+        return 0.0
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"'{name}' must be a number of seconds, got {value!r}")
+    if v < 0:
+        raise RuntimeError(f"'{name}' must be 0 or more, got {v}")
+    return v
+
+
+def _trim_audio(data, start, duration):
+    """Cut [start, start+duration) out of any audio/video file's soundtrack -> 48 kHz stereo WAV."""
+    exe = _ffmpeg_exe()
+    if not exe:
+        raise RuntimeError("cutting lipsync_audio needs ffmpeg on the worker")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src, dst = Path(tmp) / "in.bin", Path(tmp) / "out.wav"
+        src.write_bytes(data)
+        run = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.3f}", "-i", str(src),
+                              "-t", f"{duration:.3f}", "-vn", "-ac", "2", "-ar", "48000", str(dst)],
+                             capture_output=True, text=True)
+        if run.returncode != 0 or not dst.is_file() or dst.stat().st_size < 1000:
+            raise RuntimeError(f"could not cut lipsync_audio at {start:g}s (is the source that long?): {run.stderr[-200:]}")
+        return dst.read_bytes()
+
+
 def _job_seconds(job):
     """`seconds` as a float (8.5 is fine: the frame count snaps to H3's 17k+5 grid)."""
     try:
@@ -277,7 +306,7 @@ def _next_slot(inputs, prefix):
     return max(used) + 1 if used else 0
 
 
-def _wire_references(prompt, extra_images, ref_videos):
+def _wire_references(prompt, extra_images, ref_videos, seconds=None):
     """Images beyond the workflow's own loaders and reference videos go straight into the
     ref2v node's slots (H3 takes 9 images and 3 videos)."""
     if not extra_images and not ref_videos:
@@ -300,16 +329,21 @@ def _wire_references(prompt, extra_images, ref_videos):
         vslot = _next_slot(inputs, "ref_videos.ref_video_")
         if vslot + len(ref_videos) > MAX_REF_VIDEOS:
             raise RuntimeError(f"H3 takes at most {MAX_REF_VIDEOS} reference videos")
-        for k, (name, use_audio) in enumerate(ref_videos):
+        # The reference covers exactly the output window: `seconds` long (15 s max),
+        # starting `start` seconds into the source, so video, its soundtrack and a
+        # pinned lipsync track all line up.
+        cap = min(362, max(5, round(float(seconds) * 24))) if seconds else 360
+        for k, (name, use_audio, start) in enumerate(ref_videos):
             nid = f"job_ref_video_{k}"
-            # VHS loader: re-timed to H3's 24 fps and capped at 15 s; output 2 is the soundtrack
+            # VHS loader: re-timed to H3's 24 fps; output 2 is the soundtrack
             prompt[nid] = {"class_type": "VHS_LoadVideo", "inputs": {
                 "video": name, "force_rate": 24, "custom_width": 0, "custom_height": 0,
-                "frame_load_cap": 360, "skip_first_frames": 0, "select_every_nth": 1}}
+                "frame_load_cap": cap, "skip_first_frames": max(0, round(start * 24)), "select_every_nth": 1}}
             inputs[f"ref_videos.ref_video_{vslot + k}"] = [nid, 0]
             if use_audio:
                 inputs[f"ref_video_audios.ref_video_audio_{vslot + k}"] = [nid, 2]
-    print(f"[handler] wired {len(extra_images)} extra image(s), {len(ref_videos)} video(s) into ref2v", flush=True)
+    print(f"[handler] wired {len(extra_images)} extra image(s), {len(ref_videos)} video(s) into ref2v"
+          + (f" ({cap} frames from {', '.join(f'{v[2]:g}s' for v in ref_videos)})" if ref_videos else ""), flush=True)
 
 
 def _add_loras(prompt, loras, find_file):
@@ -520,17 +554,26 @@ def _patch(prompt, job):
     if len(video_sources) > MAX_REF_VIDEOS:
         raise RuntimeError(f"at most {MAX_REF_VIDEOS} reference videos")
     ref_videos = []
+    source_start = _start_seconds(job.get("source_start"), "source_start")
     for i, item in enumerate(video_sources):
         src, use_audio = (item.get("url"), bool(item.get("use_audio"))) if isinstance(item, dict) else (item, False)
         if not src:
             raise RuntimeError(f"videos[{i}] needs a url or base64")
-        ref_videos.append((_upload(f"{base}_ref_video_{i}.mp4", _media_bytes(src)), use_audio))
+        start = _start_seconds(item.get("start"), f"videos[{i}].start") if isinstance(item, dict) and item.get("start") is not None else source_start
+        ref_videos.append((_upload(f"{base}_ref_video_{i}.mp4", _media_bytes(src)), use_audio, start))
     # Exact soundtrack (song section / dub): pinned onto the output's audio with
     # MiniMaxH3AddGuide, so the clip plays this track and the picture is generated to it.
     lipsync_name = None
     if job.get("lipsync_audio"):
         data = _media_bytes(job["lipsync_audio"])
-        lipsync_name = _upload(f"{base}_lipsync{_audio_ext(job['lipsync_audio'], data)}", data)
+        lip_start = _start_seconds(job.get("lipsync_start"), "lipsync_start") if job.get("lipsync_start") is not None else source_start
+        if lip_start > 0:
+            # Same window as the reference video: cut the track from lip_start for the clip's length.
+            data = _trim_audio(data, lip_start, (_job_seconds(job) or 15) + 0.5)
+            lipsync_name = _upload(f"{base}_lipsync.wav", data)
+            print(f"[handler] lipsync_audio cut from {lip_start:g}s", flush=True)
+        else:
+            lipsync_name = _upload(f"{base}_lipsync{_audio_ext(job['lipsync_audio'], data)}", data)
 
     def _find_file(kind, needle):
         """Locate a model file under the volume + local model dirs."""
@@ -754,7 +797,7 @@ def _patch(prompt, job):
                 for k, v in n.get("inputs", {}).items():
                     if isinstance(v, list) and v and v[0] == drop_lora:
                         n["inputs"][k] = src
-    _wire_references(prompt, images[img_idx:], ref_videos)
+    _wire_references(prompt, images[img_idx:], ref_videos, _job_seconds(job) or None)
     _add_loras(prompt, job.get("loras"), _find_file)
     # Post-processing toggles: the graph chain is  save.images <- rife.frames
     # <- upscale.images <- VAEDecode.  upscale=false rewires rife.frames to the
