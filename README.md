@@ -87,6 +87,8 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   Copies are deleted after 24 hours. Set `OUTPUT_S3_BUCKET` on the endpoint to get a ready `s3_uri`.
   RunPod's volume S3 API has no presigned URLs, so `s3Config` pointing at it returns `s3_uri` only;
   other S3 providers also get a presigned `url`.
+- `{"action": "fetch", "key": "<volume_key>", "offset": 0}`: read a volume output back without S3 keys,
+  8 MiB of base64 per job (`chunk_b64`, `end`, `size`, `done`); repeat with `offset = end` until `done`.
 - `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
 - `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
   `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`

@@ -996,6 +996,27 @@ def _save_to_volume(filename, data, job):
     return out
 
 
+FETCH_CHUNK = 8 * 1024 * 1024
+
+
+def _fetch_volume_chunk(inputs):
+    """One base64 piece of a file under /runpod-volume/<S3_PREFIX>/ (8 MiB by default)."""
+    root = (Path("/runpod-volume") / S3_PREFIX).resolve()
+    key = str(inputs.get("key") or "")
+    path = (Path("/runpod-volume") / key).resolve()
+    if not key or root not in path.parents or not path.is_file():
+        raise RuntimeError(f"no output at {key!r} (keys look like {S3_PREFIX}/<job id>/<file>; copies last 24 h)")
+    size = path.stat().st_size
+    offset = max(0, int(inputs.get("offset") or 0))
+    length = min(int(inputs.get("length") or FETCH_CHUNK), 12 * 1024 * 1024)
+    with open(path, "rb") as f:
+        f.seek(offset)
+        data = f.read(length)
+    end = offset + len(data)
+    return {"key": key, "size": size, "offset": offset, "end": end, "done": end >= size,
+            "chunk_b64": base64.b64encode(data).decode()}
+
+
 def _emit_file(filename, data, job, inline_used):
     """Small outputs inline as b64. Large ones (or every one, with
     "output": "volume") go to the job's s3Config bucket, else straight onto the
@@ -1094,6 +1115,10 @@ async def handler(job):
             "workflows": sorted({p.name for d in (WF_SYNC_DIR, WORKFLOWS_DIR) for p in d.glob("*.json")}),
             "volume_mounted": os.path.isdir("/runpod-volume"),
         }
+    if inputs.get("action") == "fetch":
+        # Read back a volume output in inline-sized pieces, for callers without
+        # S3 keys: {"action": "fetch", "key": <volume_key>, "offset": 0}.
+        return await asyncio.to_thread(_fetch_volume_chunk, inputs)
     if inputs.get("sections") is not None:
         # A finished six-part prompt goes in verbatim: QwenVL passthrough, no enhancer rewrite.
         if inputs.get("prompt"):
