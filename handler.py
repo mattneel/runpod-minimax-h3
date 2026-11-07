@@ -70,7 +70,11 @@ MINIMAX_CONFIGS = {
     # 10Eros Max TURBO-hybrid beta5 (TenStrip): the turbo delta is fused into the
     # checkpoint, so no turbo LoRA on top (the slot is zeroed). Card: shift 12/3,
     # euler/simple as the 8-step starting point.
-    "10eros_turbo":      {"unet": "10eros", "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
+    "10eros_turbo":      {"unet": "TURBO-hybrid_beta5", "steps": 8,  "sampler": "euler", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
+    # 10Eros Max TURBO ref2va beta2 (TenStrip, INT8 ConvRot by cicalooo): the reference-to-video
+    # build, for the R2VA workflows (<Picture N> references); the beta5 above is FL2VA-based and
+    # ignores references. Same layout as the Comfy-Org ref2va DiT, turbo fused in.
+    "10eros_r2va_turbo": {"unet": "TURBO_ref2va", "steps": 8,  "sampler": "euler", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
 }
 
 

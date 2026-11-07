@@ -17,6 +17,8 @@ loras	minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors	https://hugging
 loras	h3_character_swap_v1.5.safetensors	https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA/resolve/main/h3_character_swap_v1.5.safetensors
 # ── 10Eros Max TURBO-hybrid beta5 (TenStrip, FL2VA finetune, turbo fused; config 10eros_turbo) ──
 diffusion_models	10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors	https://huggingface.co/TenStrip/10Eros-Max/resolve/main/10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors
+# ── 10Eros Max TURBO ref2va beta2 (reference-to-video build; config 10eros_r2va_turbo) ──
+diffusion_models	10Eros_Max_h3_TURBO_ref2va_beta2_int8_convrot.safetensors	https://huggingface.co/cicalooo/10Eros-Max-h3-int8-convrot/resolve/main/10Eros_Max_h3_TURBO_ref2va_beta2_int8_convrot.safetensors
 loras	h3_character_swap_pro4500_1000.safetensors	https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA/resolve/main/h3_character_swap_pro4500_1000.safetensors
 # ── fal Realism People LoRA (trigger: r34l1sm) ──
 loras	h3-realism-people-t2v-i2v-r2v.safetensors	https://huggingface.co/fal/MiniMax-H3-Realism-People-LoRA/resolve/main/h3-realism-people-t2v-i2v-r2v.safetensors
