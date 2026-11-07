@@ -215,6 +215,36 @@ MAX_REF_VIDEOS = 3
 QWEN_DURATIONS = (5, 10, 15, 20)
 
 
+def _media_kind(data):
+    """Rough container sniff: 'video', 'audio', 'image', 'html' or None."""
+    head = data[:64]
+    if head[4:8] == b"ftyp":
+        return "video"  # mp4 / mov / m4a share the ISO box; ffmpeg sorts out the rest
+    if head[:4] == b"\x1aE\xdf\xa3" or head[:4] == b"FLV\x01" or (head[:4] == b"RIFF" and head[8:12] == b"AVI "):
+        return "video"
+    if len(data) > 376 and data[0] == 0x47 and data[188] == 0x47:
+        return "video"  # MPEG-TS
+    if head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2") or head[:4] in (b"fLaC", b"OggS") \
+            or (head[:4] == b"RIFF" and head[8:12] == b"WAVE"):
+        return "audio"
+    if head[:8] == b"\x89PNG\r\n\x1a\n" or head[:3] == b"\xff\xd8\xff" or head[:4] == b"GIF8" \
+            or (head[:4] == b"RIFF" and head[8:12] == b"WEBP"):
+        return "image"
+    if data[:512].lstrip()[:1] == b"<" or b"<html" in data[:2048].lower():
+        return "html"
+    return None
+
+
+def _need_video(data, label):
+    kind = _media_kind(data)
+    if kind == "html":
+        raise RuntimeError(f"{label}: that link returned a web page, not a video file. Use a direct file link "
+                           "(Dropbox: ?dl=1, Google Drive: https://drive.google.com/uc?export=download&id=<id>).")
+    if kind not in ("video", None):
+        raise RuntimeError(f"{label}: that link returned {kind} data, not a video file")
+    return data
+
+
 def _start_seconds(value, name):
     if value is None or value == "":
         return 0.0
@@ -560,12 +590,14 @@ def _patch(prompt, job):
         if not src:
             raise RuntimeError(f"videos[{i}] needs a url or base64")
         start = _start_seconds(item.get("start"), f"videos[{i}].start") if isinstance(item, dict) and item.get("start") is not None else source_start
-        ref_videos.append((_upload(f"{base}_ref_video_{i}.mp4", _media_bytes(src)), use_audio, start))
+        ref_videos.append((_upload(f"{base}_ref_video_{i}.mp4", _need_video(_media_bytes(src), f"videos[{i}]")), use_audio, start))
     # Exact soundtrack (song section / dub): pinned onto the output's audio with
     # MiniMaxH3AddGuide, so the clip plays this track and the picture is generated to it.
     lipsync_name = None
     if job.get("lipsync_audio"):
         data = _media_bytes(job["lipsync_audio"])
+        if _media_kind(data) == "html":
+            raise RuntimeError("lipsync_audio: that link returned a web page, not an audio or video file. Use a direct file link.")
         lip_start = _start_seconds(job.get("lipsync_start"), "lipsync_start") if job.get("lipsync_start") is not None else source_start
         if lip_start > 0:
             # Same window as the reference video: cut the track from lip_start for the clip's length.
