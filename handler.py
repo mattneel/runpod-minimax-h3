@@ -64,7 +64,10 @@ MINIMAX_CONFIGS = {
     "r2va_stock":        {"unet": "minimax_h3_ref2va", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "lora": None, "tau": None, "sigma_off": True},
     "r2va_stock_turbo":  {"unet": "minimax_h3_ref2va", "steps": 8,  "sampler": "er_sde",        "scheduler": "normal", "lora": "fl2v_turbo", "tau": None, "sigma_off": True},
     "10eros":            {"unet": "10eros", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
-    "10eros_turbo":      {"unet": "10eros", "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 6.0,  "shift_audio": 3.0, "lora": "fusion_turbo", "tau": 1.3},
+    # 10Eros Max TURBO-hybrid beta5 (TenStrip): the turbo delta is fused into the
+    # checkpoint, so no turbo LoRA on top (the slot is zeroed). Card: shift 12/3,
+    # euler/simple as the 8-step starting point.
+    "10eros_turbo":      {"unet": "10eros", "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
 }
 
 

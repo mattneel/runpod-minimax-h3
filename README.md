@@ -61,6 +61,7 @@ A production-ready [Runpod Serverless](https://docs.runpod.io/serverless/overvie
 - **Director Native**: `prompt` = one idea per line (each = a segment, `seconds` split evenly); `global_prompt` = style prose; `subject_description` optional (auto-Analyze when empty); `enhance` = per-segment QwenVL autoprompting (default true)
 - **Director Storyboard**: `prompt` = one idea (timestamps welcome); `images` = up to 3 storyboard frames; `vl_preset` = `MiniMax › Director Storyboard` / `Director Prose`
 - Classic: `config` presets (`native`/`native_turbo`/`r2va_singularity`/`r2va_singularity_turbo`/`10eros`/`10eros_turbo`) swap DiT/LoRA/steps/sampler/shift; `lora` = style LoRA on Singularity (`none`/`realism`/`char_swap`)
+- `10eros_turbo`: TenStrip's 10Eros Max TURBO-hybrid beta5 (FL2VA finetune, INT8 ConvRot, turbo fused in, so the turbo LoRA slot is zeroed): 8 steps, euler/simple, shift 12/3. Use it with the T2VA / I2VA / FL2VA workflows. `10eros` (20 steps) expects a non-turbo 10Eros checkpoint, which the manifest does not download.
 - `video_size` — `auto` (follows the image/stills) or an explicit MMH3 native preset (`1344x768 (16:9)`, `1184x864 (4:3)`, …)
 - `upscale` / `rife` — TensorRT post chain · `"action": "health"` — status + workflow list, no generation
 
