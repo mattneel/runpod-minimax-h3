@@ -90,6 +90,8 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   other S3 providers also get a presigned `url`.
 - `{"action": "fetch", "key": "<volume_key>", "offset": 0}`: read a volume output back without S3 keys,
   8 MiB of base64 per job (`chunk_b64`, `end`, `size`, `done`); repeat with `offset = end` until `done`.
+- Any media field (`images`, `audios`, `videos`, `lipsync_audio`, ...) also takes `"volume:<volume_key>"`, an earlier
+  job's output still on the volume, so passes can be chained without re-uploading.
 - `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
 - `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
   `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`

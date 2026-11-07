@@ -167,6 +167,14 @@ async def _ensure_comfy():
 def _media_bytes(value):
     if isinstance(value, str) and value.startswith("http"):
         return urllib.request.urlopen(value, timeout=120).read()
+    if isinstance(value, str) and value.startswith("volume:"):
+        # An earlier job's output still on the network volume ("volume:<volume_key>"),
+        # so a clip can feed the next pass (e.g. one character swap per pass).
+        root = (Path("/runpod-volume") / S3_PREFIX).resolve()
+        path = (Path("/runpod-volume") / value[len("volume:"):]).resolve()
+        if root not in path.parents or not path.is_file():
+            raise RuntimeError(f"no volume output at {value!r} (copies last 24 h)")
+        return path.read_bytes()
     return base64.b64decode(value)
 
 
