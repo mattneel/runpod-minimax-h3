@@ -76,6 +76,14 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   the picture, mouths included, is generated to it. Set `seconds` to the track's length; past the
   end of the track the model makes up its own audio. `audios` alone is only a reference the model
   may or may not copy.
+- `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
+- `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
+  `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`
+  (soundtracks are numbered before `audios`).
+- `loras`: `[{"name": "char_swap", "strength": 1.0}]` stacks LoRAs from the volume after the workflow's own
+  (`char_swap` = Akatz Character Swap V1.5, `char_swap_v1`, `realism`, or part of a file name).
+- `config: r2va_stock` / `r2va_stock_turbo`: the stock Comfy-Org ref2va model (what Character Swap was trained
+  on); turbo follows the Akatz recipe (FL2V turbo 8-step LoRA, 8 steps, er_sde, normal).
 - `sections`: MiniMax's six-part full-reference prompt as an object
   (`subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
   `overall_soundscape`, `non_diegetic_music`). It is assembled in MiniMax's format and sent

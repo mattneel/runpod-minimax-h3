@@ -59,6 +59,10 @@ MINIMAX_CONFIGS = {
     "native_turbo":      {"unet": "fl2va",  "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 6.0,  "shift_audio": 3.0, "lora": "fl2v_turbo",  "tau": 1.3},
     "r2va_singularity":       {"unet": "Singularity", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "lora": None, "tau": None, "sigma_off": True},
     "r2va_singularity_turbo": {"unet": "Singularity", "steps": 6,  "sampler": "euler",         "scheduler": "beta",   "lora": "ref2v_turbo_4step", "tau": 1.3, "sigma_off": True},
+    # Stock Comfy-Org ref2va: the base the Character Swap LoRA was trained on. Turbo follows the
+    # Akatz character-swap recipe (FL2V turbo 8-step LoRA, er_sde, normal, CFG 1).
+    "r2va_stock":        {"unet": "minimax_h3_ref2va", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "lora": None, "tau": None, "sigma_off": True},
+    "r2va_stock_turbo":  {"unet": "minimax_h3_ref2va", "steps": 8,  "sampler": "er_sde",        "scheduler": "normal", "lora": "fl2v_turbo", "tau": None, "sigma_off": True},
     "10eros":            {"unet": "10eros", "steps": 20, "sampler": "res_multistep", "scheduler": "simple", "shift_video": 12.0, "shift_audio": 3.0, "lora": None, "tau": None},
     "10eros_turbo":      {"unet": "10eros", "steps": 8,  "sampler": "euler",         "scheduler": "simple", "shift_video": 6.0,  "shift_audio": 3.0, "lora": "fusion_turbo", "tau": 1.3},
 }
@@ -180,6 +184,13 @@ def _upload(filename, data):
 REF_SECTIONS = ("subject_definitions", "summary", "retention_analysis", "detailed_description",
                 "overall_soundscape", "non_diegetic_music")
 MAX_REF_AUDIOS = 3
+MAX_REF_IMAGES = 9
+MAX_REF_VIDEOS = 3
+# Short names for LoRAs on the volume; anything else is matched as part of a file name.
+LORA_ALIASES = {
+    "char_swap": "h3_character_swap_v1.5", "char_swap_v1.5": "h3_character_swap_v1.5",
+    "char_swap_v1": "h3_character_swap_pro4500", "realism": "realism",
+}
 
 
 def _sections_prompt(sections):
@@ -221,6 +232,82 @@ def _audio_ext(source, data):
         if suffix in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"):
             return suffix
     return ".mp3"
+
+
+def _next_slot(inputs, prefix):
+    used = [int(k.rsplit("_", 1)[1]) for k in inputs if k.startswith(prefix)]
+    return max(used) + 1 if used else 0
+
+
+def _wire_references(prompt, extra_images, ref_videos):
+    """Images beyond the workflow's own loaders and reference videos go straight into the
+    ref2v node's slots (H3 takes 9 images and 3 videos)."""
+    if not extra_images and not ref_videos:
+        return
+    ref_nodes = [n for n in prompt.values() if n.get("class_type") == "MiniMaxH3ReferenceToVideo"]
+    if not ref_nodes:
+        if ref_videos:
+            raise RuntimeError("'videos' needs a reference-to-video workflow (e.g. MiniMaxH3-Turbo-R2VA.json)")
+        print(f"[handler] {len(extra_images)} extra image(s) ignored: this workflow has no ref2v node", flush=True)
+        return
+    for n in ref_nodes:
+        inputs = n["inputs"]
+        slot = _next_slot(inputs, "ref_images.ref_image_")
+        if slot + len(extra_images) > MAX_REF_IMAGES:
+            raise RuntimeError(f"H3 takes at most {MAX_REF_IMAGES} reference images")
+        for k, name in enumerate(extra_images):
+            nid = f"job_ref_image_{k}"
+            prompt[nid] = {"class_type": "LoadImage", "inputs": {"image": name}}
+            inputs[f"ref_images.ref_image_{slot + k}"] = [nid, 0]
+        vslot = _next_slot(inputs, "ref_videos.ref_video_")
+        if vslot + len(ref_videos) > MAX_REF_VIDEOS:
+            raise RuntimeError(f"H3 takes at most {MAX_REF_VIDEOS} reference videos")
+        for k, (name, use_audio) in enumerate(ref_videos):
+            nid = f"job_ref_video_{k}"
+            # VHS loader: re-timed to H3's 24 fps and capped at 15 s; output 2 is the soundtrack
+            prompt[nid] = {"class_type": "VHS_LoadVideo", "inputs": {
+                "video": name, "force_rate": 24, "custom_width": 0, "custom_height": 0,
+                "frame_load_cap": 360, "skip_first_frames": 0, "select_every_nth": 1}}
+            inputs[f"ref_videos.ref_video_{vslot + k}"] = [nid, 0]
+            if use_audio:
+                inputs[f"ref_video_audios.ref_video_audio_{vslot + k}"] = [nid, 2]
+    print(f"[handler] wired {len(extra_images)} extra image(s), {len(ref_videos)} video(s) into ref2v", flush=True)
+
+
+def _add_loras(prompt, loras, find_file):
+    """`loras`: [{"name": "char_swap", "strength": 1.0}, ...] stacked after the workflow's own
+    LoRAs on every diffusion model chain."""
+    if not loras:
+        return
+    if isinstance(loras, (str, dict)):
+        loras = [loras]
+    resolved = []
+    for item in loras:
+        name, strength = (item.get("name"), float(item.get("strength", 1.0))) if isinstance(item, dict) else (item, 1.0)
+        needle = LORA_ALIASES.get(str(name), str(name))
+        found = find_file("loras", needle)
+        if not found:
+            raise RuntimeError(f"LoRA '{name}' not found on the volume")
+        resolved.append((found, strength))
+    unets = [nid for nid, n in prompt.items() if n.get("class_type") == "UNETLoader"]
+    for u, uid in enumerate(unets):
+        end = uid
+        while True:
+            nxt = next((nid for nid, n in prompt.items() if n.get("class_type") == "LoraLoaderModelOnly"
+                        and n.get("inputs", {}).get("model") == [end, 0]), None)
+            if nxt is None:
+                break
+            end = nxt
+        consumers = [(n, k) for n in prompt.values() for k, v in n.get("inputs", {}).items() if v == [end, 0]]
+        prev = end
+        for j, (fname, strength) in enumerate(resolved):
+            nid = f"job_lora_{u}_{j}"
+            prompt[nid] = {"class_type": "LoraLoaderModelOnly",
+                           "inputs": {"model": [prev, 0], "lora_name": fname, "strength_model": strength}}
+            prev = nid
+        for n, k in consumers:
+            n["inputs"][k] = [prev, 0]
+    print(f"[handler] added LoRA(s) {[f for f, _ in resolved]} to {len(unets)} model chain(s)", flush=True)
 
 
 def _load_workflow(name):
@@ -387,6 +474,19 @@ def _patch(prompt, job):
     for i, src in enumerate(audio_sources):
         data = _media_bytes(src)
         audios.append(_upload(f"{base}_audio_{i}{_audio_ext(src, data)}", data))
+    # Reference videos for ref2v (<Video 1>, ...): {"url": ..., "use_audio": true} also passes the
+    # clip's soundtrack as an <Audio N> (soundtracks are numbered before `audios`).
+    video_sources = job.get("videos") or []
+    if isinstance(video_sources, (str, dict)):
+        video_sources = [video_sources]
+    if len(video_sources) > MAX_REF_VIDEOS:
+        raise RuntimeError(f"at most {MAX_REF_VIDEOS} reference videos")
+    ref_videos = []
+    for i, item in enumerate(video_sources):
+        src, use_audio = (item.get("url"), bool(item.get("use_audio"))) if isinstance(item, dict) else (item, False)
+        if not src:
+            raise RuntimeError(f"videos[{i}] needs a url or base64")
+        ref_videos.append((_upload(f"{base}_ref_video_{i}.mp4", _media_bytes(src)), use_audio))
     # Exact soundtrack (song section / dub): pinned onto the output's audio with
     # MiniMaxH3AddGuide, so the clip plays this track and the picture is generated to it.
     lipsync_name = None
@@ -612,6 +712,8 @@ def _patch(prompt, job):
                 for k, v in n.get("inputs", {}).items():
                     if isinstance(v, list) and v and v[0] == drop_lora:
                         n["inputs"][k] = src
+    _wire_references(prompt, images[img_idx:], ref_videos)
+    _add_loras(prompt, job.get("loras"), _find_file)
     # Post-processing toggles: the graph chain is  save.images <- rife.frames
     # <- upscale.images <- VAEDecode.  upscale=false rewires rife.frames to the
     # decoder output; rife=false rewires save.images to rife's own source.
