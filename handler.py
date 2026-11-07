@@ -186,6 +186,18 @@ REF_SECTIONS = ("subject_definitions", "summary", "retention_analysis", "detaile
 MAX_REF_AUDIOS = 3
 MAX_REF_IMAGES = 9
 MAX_REF_VIDEOS = 3
+QWEN_DURATIONS = (5, 10, 15, 20)
+
+
+def _job_seconds(job):
+    """`seconds` as a float (8.5 is fine: the frame count snaps to H3's 17k+5 grid)."""
+    try:
+        sec = float(job.get("seconds") or 0)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"'seconds' must be a number, got {job.get('seconds')!r}")
+    if sec < 0:
+        raise RuntimeError(f"'seconds' must be positive, got {sec}")
+    return sec
 # Short names for LoRAs on the volume; anything else is matched as part of a file name.
 LORA_ALIASES = {
     "char_swap": "h3_character_swap_v1.5", "char_swap_v1.5": "h3_character_swap_v1.5",
@@ -378,7 +390,7 @@ def _director_timeline(job):
     # context and the compiled prompt's first lines carry it.
     global_prompt = "\n".join(x for x in (_job_style_text(job), str(job.get("global_prompt") or "")) if x.strip())
 
-    seconds = int(job.get("seconds") or 10)
+    seconds = _job_seconds(job) or 10
     per = max(1, round(seconds / len(ideas)))
 
     subject_desc = (job.get("subject_description") or "").strip()
@@ -533,7 +545,7 @@ def _patch(prompt, job):
             # the timeline's total, or `seconds` when no timeline was built.
             if director_tdata is not None:
                 inp["timeline_data"] = director_tdata
-            total = director_total or (int(job["seconds"]) * 24 if job.get("seconds") else 0)
+            total = director_total or round((_job_seconds(job) or 0) * 24)
             if total:
                 for wkey, val in (("start_frame", 0), ("end_frame", total),
                                   ("duration_frames", total),
@@ -561,14 +573,17 @@ def _patch(prompt, job):
         if director_nodes and director_tdata is None and ct == "StringConcatenate" \
                 and "string_a" in inp and not isinstance(inp["string_a"], list):
             inp["string_a"] = _job_style_text(job)
-        if director_tdata is None and job.get("seconds"):
-            sec = int(job["seconds"])
+        if director_tdata is None and _job_seconds(job):
+            sec = _job_seconds(job)
             if "duration" in inp:
-                inp["duration"] = f"{sec}s"
+                # QwenVL enhancer hint: a fixed 5s/10s/15s/20s dropdown, not the
+                # clip length — any other value fails validation and ComfyUI
+                # silently drops every output downstream of it.
+                inp["duration"] = f"{min(QWEN_DURATIONS, key=lambda d: abs(d - sec))}s"
             elif "length" in inp and not isinstance(inp["length"], list):
-                inp["length"] = sec * 24
+                inp["length"] = round(sec * 24)
             elif "value" in inp and ct.startswith("Primitive"):
-                inp["value"] = sec
+                inp["value"] = round(sec) if ct == "PrimitiveInt" else sec
         if "lora_name" in inp:
             cur_lora = str(inp.get("lora_name", "")).lower()
             if "realism" in cur_lora or "character_swap" in cur_lora:
@@ -898,6 +913,15 @@ def _interrupt_prompt(prompt_id):
             print(f"[handler] {path} failed during cancel: {exc}", flush=True)
 
 
+def _node_error_text(node_errors):
+    """One line per rejected node: 'QwenVL_Unified 105:258: duration: '8s' not in [...]'."""
+    out = []
+    for nid, info in (node_errors or {}).items():
+        for err in (info or {}).get("errors", [])[:2]:
+            out.append(f"{info.get('class_type', '?')} {nid}: {err.get('details') or err.get('message')}")
+    return "; ".join(out)[:800]
+
+
 async def _queue_and_wait(prompt):
     # Async + awaited sleeps: the runpod SDK stops a job by cancelling its
     # task, so the CancelledError can only be delivered at an await — a sync
@@ -906,6 +930,9 @@ async def _queue_and_wait(prompt):
     resp = json.loads(await asyncio.to_thread(
         _http, "/prompt", {"prompt": prompt, "client_id": client_id}, 60))
     prompt_id = resp["prompt_id"]
+    node_errors = resp.get("node_errors") or {}
+    if node_errors:
+        print(f"[handler] ComfyUI rejected {len(node_errors)} output branch(es): {_node_error_text(node_errors)}", flush=True)
     deadline = time.time() + JOB_TIMEOUT_S
     try:
         while time.time() < deadline:
@@ -915,7 +942,7 @@ async def _queue_and_wait(prompt):
                 msgs = [str(m) for m in entry.get("status", {}).get("messages", [])]
                 raise RuntimeError(f"ComfyUI job failed: {' | '.join(msgs)[:800]}")
             if entry and entry.get("status", {}).get("completed"):
-                return entry
+                return entry, node_errors
             await asyncio.sleep(3)
     except asyncio.CancelledError:
         # Even if this await gets cancelled again, the orphan thread still
@@ -1057,7 +1084,7 @@ async def handler(job):
     started = time.time()
     comfy_log = Path("/workspace/comfy.log")
     log_mark = comfy_log.stat().st_size if comfy_log.is_file() else 0
-    history = await _queue_and_wait(prompt)
+    history, node_errors = await _queue_and_wait(prompt)
     print(f"[handler] comfy execution took {time.time() - started:.1f}s", flush=True)
     inline_used = [0]
     outputs, texts = await asyncio.to_thread(_collect_outputs, history, prompt, job, inline_used)
@@ -1074,6 +1101,10 @@ async def handler(job):
         outputs = _collect_new_files(started, job, inline_used)
         print(f"[handler] fallback sweep — {len(outputs)} file(s) in output/", flush=True)
     print(f"[handler] done — {len(outputs)} output(s)", flush=True)
+    if not outputs:
+        # A job that produced nothing is a failure, not an empty success.
+        why = _node_error_text(node_errors) if node_errors else "the workflow finished without saving a file"
+        raise RuntimeError(f"no output produced: {why}")
     return {"outputs": outputs, "texts": texts}
 
 

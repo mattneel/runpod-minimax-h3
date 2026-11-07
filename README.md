@@ -76,6 +76,10 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   the picture, mouths included, is generated to it. Set `seconds` to the track's length; past the
   end of the track the model makes up its own audio. `audios` alone is only a reference the model
   may or may not copy.
+- `seconds` takes any number, decimals included (8.5). The frame count rounds up to H3's
+  17k+5 grid (8 s = 192 frames exactly, 8.5 s = 209 frames = 8.7 s), so for a pinned track pick
+  `seconds` at or just under its length. A job that saves no file now fails with ComfyUI's reason
+  instead of returning an empty `outputs` list.
 - `images`: beyond the workflow's own image loaders, extra images go straight into the ref2v node (up to 9).
 - `videos`: up to 3 reference videos (`<Video 1>`, ...), re-timed to 24 fps and capped at 15 s;
   `{"url": ..., "use_audio": true}` also passes the clip's soundtrack as an `<Audio N>`
