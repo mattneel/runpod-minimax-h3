@@ -81,8 +81,11 @@ Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.
   17k+5 grid (8 s = 192 frames exactly, 8.5 s = 209 frames = 8.7 s), so for a pinned track pick
   `seconds` at or just under its length. A job that saves no file now fails with ComfyUI's reason
   instead of returning an empty `outputs` list.
-- `output: "volume"`: write the result straight onto the network volume instead of returning it inline.
-  Files over the inline limit (10 MB) go there automatically. The output entry carries
+- Every output comes back inline (`outputs[].b64`): a clip over 12 MB (RunPod drops results over ~20 MB,
+  and base64 adds a third) is re-encoded to H.264/AAC at the bitrate that fits, same resolution and fps
+  (`reencoded_kbps`), and the untouched original is kept on the volume (`original_volume_key`).
+  `OUTPUT_FIT=false` on the endpoint turns this off.
+- `output: "volume"`: skip the inline copy and write the result straight onto the network volume. The output entry carries
   `volume_key` (`outputs/<job id>/<file>`); read it through the volume's S3 API:
   `aws s3 cp s3://<volume id>/<volume_key> . --region <DC> --endpoint-url https://s3api-<dc>.runpod.io`.
   Copies are deleted after 24 hours. Set `OUTPUT_S3_BUCKET` on the endpoint to get a ready `s3_uri`.

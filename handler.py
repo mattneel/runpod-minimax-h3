@@ -50,8 +50,10 @@ WF_SYNC_MANIFEST = WF_SYNC_DIR / ".manifest"
 
 # Output delivery: base64 inline under these limits, S3 offload above them.
 # RunPod's job-done callback drops results over ~20MB, so keep headroom.
-INLINE_MAX = int(os.environ.get("OUTPUT_INLINE_MAX_MB", "10")) * 1024 * 1024
-INLINE_BUDGET = int(os.environ.get("OUTPUT_INLINE_BUDGET_MB", "15")) * 1024 * 1024
+# RunPod drops a job result over ~20 MB, and base64 adds a third: 12 MB of file is
+# the most that reliably comes back inline (per file and per job).
+INLINE_MAX = int(float(os.environ.get("OUTPUT_INLINE_MAX_MB", "12")) * 1024 * 1024)
+INLINE_BUDGET = int(float(os.environ.get("OUTPUT_INLINE_BUDGET_MB", "12")) * 1024 * 1024)
 S3_PREFIX = os.environ.get("S3_OUTPUT_PREFIX", "outputs")
 
 # Config → unet filename needle + sampler values (mirrors chat_service.py _MINIMAX_CONFIGS)
@@ -1021,6 +1023,55 @@ def _save_to_volume(filename, data, job):
     return out
 
 
+def _ffmpeg_exe():
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def _fit_video(filename, data, limit):
+    """Re-encode an MP4 to H.264/AAC under `limit` bytes (same resolution and fps,
+    bitrate from the clip's duration) so it can come back inline. None on failure."""
+    exe = _ffmpeg_exe()
+    if not exe or not filename.lower().endswith((".mp4", ".mov", ".webm", ".mkv")):
+        return None
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / ("in" + Path(filename).suffix)
+        src.write_bytes(data)
+        probe = subprocess.run([exe, "-hide_banner", "-i", str(src)], capture_output=True, text=True).stderr
+        m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", probe)
+        if not m:
+            return None
+        seconds = max(0.5, int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)))
+        has_audio = "Audio:" in probe
+        audio_kbps = 128 if has_audio else 0
+        budget_kbps = limit * 8 / 1000 / seconds * 0.92  # container overhead + rate-control slack
+        for attempt in range(3):
+            video_kbps = int(max(300, budget_kbps - audio_kbps) * (0.85 ** attempt))
+            dst = Path(tmp) / f"out{attempt}.mp4"
+            cmd = [exe, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+                   "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", "-profile:v", "high",
+                   "-b:v", f"{video_kbps}k", "-maxrate", f"{int(video_kbps * 1.25)}k",
+                   "-bufsize", f"{video_kbps * 2}k", "-movflags", "+faststart"]
+            cmd += ["-c:a", "aac", "-b:a", f"{audio_kbps}k"] if has_audio else ["-an"]
+            run = subprocess.run(cmd + [str(dst)], capture_output=True, text=True)
+            if run.returncode != 0 or not dst.is_file():
+                print(f"[handler] fit encode failed: {run.stderr[-300:]}", flush=True)
+                return None
+            out = dst.read_bytes()
+            if len(out) <= limit:
+                print(f"[handler] {filename}: {len(data)/1e6:.1f}MB -> {len(out)/1e6:.1f}MB "
+                      f"({video_kbps} kb/s video) to fit inline", flush=True)
+                return out, video_kbps
+        return None
+
+
 FETCH_CHUNK = 8 * 1024 * 1024
 
 
@@ -1040,6 +1091,10 @@ def _fetch_volume_chunk(inputs):
     end = offset + len(data)
     return {"key": key, "size": size, "offset": offset, "end": end, "done": end >= size,
             "chunk_b64": base64.b64encode(data).decode()}
+
+
+def _fit_on():
+    return os.environ.get("OUTPUT_FIT", "true").lower() not in ("0", "false", "no")
 
 
 def _emit_file(filename, data, job, inline_used):
@@ -1066,6 +1121,22 @@ def _emit_file(filename, data, job, inline_used):
             return out
         except Exception as e:
             print(f"[handler] s3 upload failed for {filename}: {e} — trying the volume", flush=True)
+    if oversized and not to_volume and _fit_on():
+        # Default: shrink the clip until it fits the inline result, so every job
+        # returns its file directly; the untouched original stays on the volume.
+        room = max(1024 * 1024, min(INLINE_MAX, INLINE_BUDGET - inline_used[0]))
+        fitted = _fit_video(filename, data, room)
+        if fitted:
+            small, kbps = fitted
+            out = {"filename": filename, "b64": base64.b64encode(small).decode(), "bytes": len(small),
+                   "reencoded_kbps": kbps, "original_bytes": len(data)}
+            if os.path.isdir("/runpod-volume"):
+                try:
+                    out["original_volume_key"] = _save_to_volume(filename, data, job)["volume_key"]
+                except Exception as e:
+                    print(f"[handler] volume copy failed for {filename}: {e}", flush=True)
+            inline_used[0] += len(small)
+            return out
     if (oversized or to_volume) and os.path.isdir("/runpod-volume"):
         try:
             return _save_to_volume(filename, data, job)
