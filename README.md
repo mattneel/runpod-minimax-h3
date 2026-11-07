@@ -64,7 +64,37 @@ A production-ready [Runpod Serverless](https://docs.runpod.io/serverless/overvie
 - `video_size` — `auto` (follows the image/stills) or an explicit MMH3 native preset (`1344x768 (16:9)`, `1184x864 (4:3)`, …)
 - `upscale` / `rife` — TensorRT post chain · `"action": "health"` — status + workflow list, no generation
 
-## Custom nodes baked in
+## Reference audio + six-part prompts (ref2v)
+
+Two extra job fields for MiniMaxH3-Turbo-R2VA.json / MiniMaxH3-Singularity-R2VA.json:
+
+- `audios`: up to 3 reference audio files (URL or base64; mp3/wav/flac/ogg/m4a) wired into the
+  ref2v node as `<Audio 1>`, `<Audio 2>`, ... Mark a song section `fully_copy` in the prompt to
+  have the clip use it exactly (the character performs to it), or `reference` for timbre only.
+- `sections`: MiniMax's six-part full-reference prompt as an object
+  (`subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
+  `overall_soundscape`, `non_diegetic_music`). It is assembled in MiniMax's format and sent
+  verbatim (`enhance` is forced off so QwenVL does not rewrite it). Use instead of `prompt`.
+
+```json
+{"input": {
+  "workflow": "MiniMaxH3-Turbo-R2VA.json",
+  "config": "r2va_singularity_turbo",
+  "images": ["https://.../singer.png"],
+  "audios": ["https://.../chorus.mp3"],
+  "seconds": 8,
+  "sections": {
+    "subject_definitions": "<Subject 1> is the singer in <Picture 1>.\n<Audio 1> is the song section <Subject 1> sings.",
+    "summary": "[reference generation + audio reuse] <Subject 1> sings the chorus on a neon rooftop.",
+    "retention_analysis": "<Subject 1> (appears in [Shot 1]): fully_preserved - face, hair, jacket.\n<Audio 1>: fully_copy - the song is used exactly as given.",
+    "detailed_description": "Cinematic music-video look.\n[Shot 1] <Subject 1> (S1) sings to camera, <d>[English] the chorus lyrics</d>",
+    "overall_soundscape": "N/A",
+    "non_diegetic_music": "N/A"
+  }
+}}
+```
+
+Custom nodes baked in
 
 `ComfyUI-VideoHelperSuite` · `ComfyUI-Easy-Use` · `ComfyUI-Impact-Pack` · `ComfyUI-Impact-Subpack` · `ComfyUI-QwenVL-Mod` · `ComfyUI-MiniMaxH3-Director-Enhanced` · `ComfyUI-RIFE-TensorRT-Auto` · `ComfyUI-Upscaler-TensorRT-Auto` · `ComfyUI-TagForge` · `ComfyUI-PerfectVideoResolution` · `ComfyUI-Pixaroma` · `ComfyUI-KJNodes`
 

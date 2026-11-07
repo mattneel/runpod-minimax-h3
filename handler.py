@@ -176,6 +176,53 @@ def _upload(filename, data):
     return resp.get("name", filename)
 
 
+# MiniMax H3 full-reference prompt (ref2v), in MiniMax's order.
+REF_SECTIONS = ("subject_definitions", "summary", "retention_analysis", "detailed_description",
+                "overall_soundscape", "non_diegetic_music")
+MAX_REF_AUDIOS = 3
+
+
+def _sections_prompt(sections):
+    """`sections` -> MiniMax's six-part prompt text ("name:\nbody" blocks, blank line between).
+    The two audio sections default to N/A as in MiniMax's guide."""
+    if not isinstance(sections, dict):
+        raise RuntimeError("'sections' must be an object of the six MiniMax ref2v sections")
+    unknown = set(sections) - set(REF_SECTIONS)
+    if unknown:
+        raise RuntimeError(f"unknown sections {sorted(unknown)}; use {list(REF_SECTIONS)}")
+    for need in ("subject_definitions", "detailed_description"):
+        if not str(sections.get(need) or "").strip():
+            raise RuntimeError(f"sections.{need} is required")
+    blocks = []
+    for key in REF_SECTIONS:
+        body = str(sections.get(key) or "").strip()
+        if not body and key in ("overall_soundscape", "non_diegetic_music"):
+            body = "N/A"
+        if body:
+            blocks.append(f"{key}:\n{body}")
+    return "\n\n".join(blocks)
+
+
+def _audio_ext(source, data):
+    """File extension ComfyUI's LoadAudio accepts, from magic bytes (URL suffix as fallback)."""
+    head = data[:12]
+    if head[:4] == b"RIFF":
+        return ".wav"
+    if head[:4] == b"fLaC":
+        return ".flac"
+    if head[:4] == b"OggS":
+        return ".ogg"
+    if head[4:8] == b"ftyp":
+        return ".m4a"
+    if head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return ".mp3"
+    if isinstance(source, str) and source.startswith("http"):
+        suffix = Path(urllib.parse.urlparse(source).path).suffix.lower()
+        if suffix in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"):
+            return suffix
+    return ".mp3"
+
+
 def _load_workflow(name):
     """Workflow templates must be saved in ComfyUI *API format* (Export API),
     where every node is keyed by id and inputs carry widget names — the UI
@@ -330,6 +377,16 @@ def _patch(prompt, job):
     video_name = None
     if job.get("video"):
         video_name = _upload(f"{base}.mp4", _media_bytes(job["video"]))
+    # Reference audio (a song section, a voice) for ref2v: <Audio 1>, <Audio 2>, ...
+    audio_sources = job.get("audios") or []
+    if isinstance(audio_sources, str):
+        audio_sources = [audio_sources]
+    if len(audio_sources) > MAX_REF_AUDIOS:
+        raise RuntimeError(f"at most {MAX_REF_AUDIOS} reference audios")
+    audios = []
+    for i, src in enumerate(audio_sources):
+        data = _media_bytes(src)
+        audios.append(_upload(f"{base}_audio_{i}{_audio_ext(src, data)}", data))
 
     def _find_file(kind, needle):
         """Locate a model file under the volume + local model dirs."""
@@ -474,6 +531,20 @@ def _patch(prompt, job):
             for k, v in n.get("inputs", {}).items():
                 if isinstance(v, list) and v and v[0] in sigma_off:
                     n["inputs"][k] = sigma_off[v[0]]
+    if audios:
+        ref_nodes = [n for n in prompt.values() if n.get("class_type") == "MiniMaxH3ReferenceToVideo"]
+        if not ref_nodes:
+            raise RuntimeError("'audios' needs a reference-to-video workflow (e.g. MiniMaxH3-Turbo-R2VA.json)")
+        for n in ref_nodes:
+            used = [int(k.rsplit("_", 1)[1]) for k in n["inputs"] if k.startswith("ref_audios.ref_audio_")]
+            start = max(used) + 1 if used else 0
+            if start + len(audios) > MAX_REF_AUDIOS:
+                raise RuntimeError(f"the workflow already uses {start} ref audio slot(s); H3 takes {MAX_REF_AUDIOS}")
+            for i, name in enumerate(audios):
+                nid = f"job_ref_audio_{i}"
+                prompt[nid] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+                n["inputs"][f"ref_audios.ref_audio_{start + i}"] = [nid, 0]
+        print(f"[handler] wired {len(audios)} reference audio(s) into ref2v", flush=True)
     # LoadImage nodes left on the template filename (fewer uploads than loaders —
     # e.g. single-image edits with an optional image2) would fail validation;
     # drop them and unlink their consumers instead.
@@ -831,6 +902,11 @@ async def handler(job):
             "workflows": sorted({p.name for d in (WF_SYNC_DIR, WORKFLOWS_DIR) for p in d.glob("*.json")}),
             "volume_mounted": os.path.isdir("/runpod-volume"),
         }
+    if inputs.get("sections") is not None:
+        # A finished six-part prompt goes in verbatim: QwenVL passthrough, no enhancer rewrite.
+        if inputs.get("prompt"):
+            raise RuntimeError("give either 'prompt' or 'sections', not both")
+        inputs = {**inputs, "prompt": _sections_prompt(inputs["sections"]), "enhance": False}
     # Any real workload needs ComfyUI — wait for the background boot first.
     await _ensure_comfy()
     _prune_volume_outputs()
